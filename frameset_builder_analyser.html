@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>FrameSet Builder 分析工具</title>
+</head>
+<body>
+  <h2>上传 frameset_builder.jsp 文件</h2>
+  <input type="file" id="fileInput" accept=".jsp">
+  
+  <h3>可选参数</h3>
+  <label for="localIp">本地 IP: </label>
+  <input type="text" id="localIp" placeholder="例如 192.168.11.1">
+  <br>
+  <label for="portInput">端口号: </label>
+  <input type="text" id="portInput" placeholder="例如 8888">
+  
+  <br><br>
+  <button id="processButton">分析文件</button>
+  
+  <h3>分析结果</h3>
+  <pre id="output"></pre>
+
+  <h3>下载选项</h3>
+  <label>
+    <input type="radio" name="downloadFormat" value="txt" checked> iptv.txt
+  </label>
+  <label>
+    <input type="radio" name="downloadFormat" value="m3u"> iptv.m3u
+  </label>
+  <br><br>
+  <button id="downloadButton">下载文件</button>
+  
+  <script>
+    // 全局变量，用于存储解析后的记录
+    let records = [];
+    
+    document.getElementById('processButton').addEventListener('click', function() {
+      const fileInput = document.getElementById('fileInput');
+      if (!fileInput.files || fileInput.files.length === 0) {
+        alert('请先选择一个文件');
+        return;
+      }
+      const file = fileInput.files[0];
+      const reader = new FileReader();
+      
+      reader.onload = function(e) {
+        try {
+          const content = e.target.result;
+          // 清空之前的记录
+          records = [];
+          // 正则表达式匹配格式：ChannelName="...",UserChannelID="...",ChannelURL="..."
+          const regex = /ChannelName="([^"]+)"\s*,\s*UserChannelID="([^"]+)"\s*,\s*ChannelURL="([^"]+)"/g;
+          let match;
+          
+          // 获取本地IP和端口参数
+          const localIp = document.getElementById('localIp').value.trim();
+          const port = document.getElementById('portInput').value.trim();
+          
+          // 简单验证 IP 和端口号
+          const ipRegex = /^(25[0-5]|2[0-4]\d|[01]?\d?\d)(\.(25[0-5]|2[0-4]\d|[01]?\d?\d)){3}$/;
+          const ipValid = localIp && ipRegex.test(localIp);
+          let portValid = false;
+          if (port && /^\d+$/.test(port)) {
+            const portNum = parseInt(port, 10);
+            if (portNum >= 1 && portNum <= 65535) {
+              portValid = true;
+            }
+          }
+          // 当且仅当 IP 与端口都有效时进行转换
+          const transform = ipValid && portValid;
+          
+          while ((match = regex.exec(content)) !== null) {
+            let channelName = match[1];
+            let channelUrl = match[3];
+            if (transform && channelUrl.startsWith("igmp://")) {
+              // 移除 igmp:// 前缀，构造新的 URL 格式为 http://本地IP:端口/udp/剩余部分
+              const rest = channelUrl.substring("igmp://".length);
+              channelUrl = "http://" + localIp + ":" + port + "/udp/" + rest;
+            }
+            records.push({ channelName, channelUrl });
+          }
+          
+          // 排序规则：
+          // 1. 若 ChannelName 包含 "HD" 或 "4K"（不区分大小写）的记录排在前面（rank=0），否则 rank=1；
+          // 2. 同组内按 ChannelName 降序排列（即 Z 到 A）。
+          records.sort((a, b) => {
+            const getRank = name => {
+              const upper = name.toUpperCase();
+              return (upper.includes("HD") || upper.includes("4K")) ? 0 : 1;
+            };
+            const rankA = getRank(a.channelName);
+            const rankB = getRank(b.channelName);
+            if (rankA !== rankB) {
+              return rankA - rankB;
+            }
+            return b.channelName.localeCompare(a.channelName);
+          });
+          
+          let outputStr = "";
+          if (records.length === 0) {
+            outputStr = "未找到匹配的记录。";
+          } else {
+            records.forEach(record => {
+              outputStr += record.channelName + "，" + record.channelUrl + "\n";
+            });
+          }
+          document.getElementById('output').textContent = outputStr;
+        } catch (error) {
+          console.error("解析文件时出错：", error);
+          document.getElementById('output').textContent = "解析文件时出错。";
+        }
+      };
+      
+      reader.onerror = function(e) {
+        alert("读取文件出错");
+      };
+      
+      // 指定编码为 UTF-8，如文件编码不是 UTF-8，请修改为相应编码（如："GBK"）
+      reader.readAsText(file, "UTF-8");
+    });
+    
+    document.getElementById('downloadButton').addEventListener('click', function() {
+      if (records.length === 0) {
+        alert("没有可下载的内容，请先分析文件。");
+        return;
+      }
+      const format = document.querySelector('input[name="downloadFormat"]:checked').value;
+      let content = "";
+      let filename = "";
+      
+      if (format === "txt") {
+        // 每条记录一行，格式为：ChannelName，ChannelURL
+        records.forEach(record => {
+          content += record.channelName + "，" + record.channelUrl + "\n";
+        });
+        filename = "iptv.txt";
+      } else if (format === "m3u") {
+        // m3u 格式：第一行为 #EXTM3U，然后每条记录两行
+        content = "#EXTM3U\n";
+        records.forEach(record => {
+          content += "#EXTINF:-1," + record.channelName + "\n" + record.channelUrl + "\n";
+        });
+        filename = "playlist.m3u";
+      }
+      
+      const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+  </script>
+</body>
+</html>
