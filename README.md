@@ -1,1 +1,2 @@
 安徽电信IPTV组播地址，省内应该多数地址都是通用的。
+frameset_builder_analyser.html则用来快速从frameset_builder.jsp中提取组播地址并可生成m3u文件。
